@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Spike's File Manager</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <style>
+        /* --- Existing Styles --- */
+        .card.drag-over { border: 2px dashed #4f46e5; background-color: #f8fafc; transform: scale(1.01); transition: all 0.2s ease; }
+        .header-section { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .upload-label { font-size: 1.5rem; font-weight: 600; color: #374151; margin-right: 10px; }
+        .upload-btn { background: #4f46e5; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 4px 6px rgba(79, 70, 229, 0.2); display: inline-flex; align-items: center; }
+        .upload-btn:hover { background: #e0e7ff; color: #4f46e5; transform: translateY(-1px); }
+        body { padding: 10vh 0; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; background: linear-gradient(135deg, #667eea, #764ba2); font-family: system-ui, sans-serif; user-select: none; /* Important for drag select */ }
+        .card { background: white; width: 90vw; padding: 32px; border-radius: 16px; box-shadow: 0 20px 40px rgba(0,0,0,0.2); display: flex; flex-direction: column; position: relative; }
+
+        .file-header { display: grid; grid-template-columns: 50px 1fr 180px 120px 112px; gap: 12px; padding: 12px; font-weight: 700; border-bottom: 2px solid #e5e7eb; color: #374151; }
+        .sort-header { cursor: pointer; display: flex; align-items: center; gap: 8px; transition: color 0.2s; user-select: none; }
+        .sort-arrow { font-size: 0.7rem; opacity: 0.3; transition: opacity 0.2s, transform 0.2s; color: #6b7280; }
+        .sort-header:hover { color: #4f46e5; }
+        .sort-header.active { color: #4f46e5; }
+        .sort-header.active .sort-arrow { opacity: 1; color: #4f46e5; }
+        .sort-header.desc .sort-arrow { transform: rotate(180deg); }
+
+        .file-item { display: grid; grid-template-columns: 50px 1fr 180px 120px 112px; align-items: center; gap: 12px; padding: 12px; background: #f3f4f6; border-radius: 8px; margin-top: 10px; border: 2px solid transparent; transition: all 0.1s; }
+
+        /* --- NEW: Selection Styles --- */
+        .file-item.selected {
+            background-color: #e0e7ff;
+            border-color: #4f46e5;
+        }
+
+        /* The Drag Selection Box */
+        #selection-box {
+            position: fixed;
+            background: rgba(79, 70, 229, 0.2);
+            border: 1px solid #4f46e5;
+            display: none;
+            pointer-events: none; /* Let clicks pass through */
+            z-index: 9999;
+        }
+
+        /* Bulk Action Bar */
+        .bulk-actions-bar {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%) translateY(150%);
+            background: #1f2937;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 50px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            z-index: 1000;
+        }
+
+        .bulk-actions-bar.show {
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .bulk-btn {
+            background: none;
+            border: none;
+            color: white;
+            cursor: pointer;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 20px;
+            transition: background 0.2s;
+        }
+
+        .bulk-btn:hover { background: rgba(255,255,255,0.1); }
+        .bulk-btn.delete:hover { background: #dc2626; }
+
+        .divider { width: 1px; height: 24px; background: rgba(255,255,255,0.2); }
+
+        /* --- Existing Button Styles --- */
+        .download-btn { background: #74ea7a; border: 1px solid #c7d2fe; cursor: pointer; color: #4f46e5; padding: 8px; border-radius: 8px; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; }
+        .download-btn:hover { background: #e0e7ff; transform: translateY(-1px); }
+        .delete-btn { background: #fee2e2; border: 1px solid #fecaca; cursor: pointer; color: #dc2626; padding: 8px; border-radius: 8px; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; }
+        .delete-btn:hover { background: #fecaca; transform: translateY(-1px); }
+        .btn-icon { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+        /* Confirmation Modal Styles */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); display: flex; align-items: center; justify-content: center; z-index: 10000; opacity: 0; transition: opacity 0.3s ease; pointer-events: none; }
+        .modal-overlay.show { opacity: 1; pointer-events: all; }
+        .modal-content { background: white; padding: 32px; border-radius: 16px; box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3); max-width: 400px; width: 90%; transform: scale(0.9); transition: transform 0.3s ease; }
+        .modal-overlay.show .modal-content { transform: scale(1); }
+        .modal-title { font-size: 1.5rem; font-weight: 700; color: #374151; margin-bottom: 12px; }
+        .modal-message { color: #6b7280; margin-bottom: 24px; line-height: 1.5; }
+        .modal-buttons { display: flex; gap: 12px; justify-content: flex-end; }
+        .modal-btn { padding: 10px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; border: none; transition: all 0.2s ease; }
+        .modal-btn-cancel { background: #e5e7eb; color: #374151; }
+        .modal-btn-cancel:hover { background: #d1d5db; }
+        .modal-btn-confirm { background: #dc2626; color: white; }
+        .modal-btn-confirm:hover { background: #b91c1c; transform: translateY(-1px); }
+    </style>
+</head>
+<body>
+
+<div id="toast-container" style="position: fixed; top: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 10px;"></div>
+
+<div id="selection-box"></div>
+
+<div id="bulkActions" class="bulk-actions-bar">
+    <span id="selectedCount">0 selected</span>
+    <div class="divider"></div>
+    <button class="bulk-btn" onclick="bulkDownload()">
+        <svg class="btn-icon" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+        Download
+    </button>
+    <button class="bulk-btn delete" onclick="confirmBulkDelete()">
+        <svg class="btn-icon" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+        Delete
+    </button>
+</div>
+
+<div id="deleteModal" class="modal-overlay">
+    <div class="modal-content">
+        <h3 class="modal-title">Delete File(s)</h3>
+        <p class="modal-message" id="modalMessage">Are you sure?</p>
+        <div class="modal-buttons">
+            <button class="modal-btn modal-btn-cancel" onclick="closeDeleteModal()">Cancel</button>
+            <button class="modal-btn modal-btn-confirm" onclick="executeDelete()">Delete</button>
+        </div>
+    </div>
+</div>
+
+<div class="card" id="mainCard">
+    <div class="header-section" style="display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+        <h2 style="margin: 0; white-space: nowrap;">Uploaded Files:</h2>
+        <input type="text" id="fileSearch" placeholder="Search files..." style="flex: 1 1 300px; max-width: 400px; padding: 10px 16px; border-radius: 8px; border: 1px solid #d1d5db; font-size: 1rem; outline: none; transition: all 0.2s ease;" oninput="filterFilesByName()">
+
+        <div class="upload-container" style="display:flex; align-items:center; gap:8px; flex-shrink: 0;">
+            <span class="upload-label" style="margin:0; font-weight:600;">Upload:</span>
+            <input type="file" webkitdirectory multiple id="folderInput" style="display:none" onchange="handleFileUpload(event)">
+            <button class="upload-btn" onclick="document.getElementById('folderInput').click()" title="Upload Folder">
+                <svg class="btn-icon" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            </button>
+            <input type="file" multiple id="fileInput" style="display:none" onchange="handleFileUpload(event)">
+            <button class="upload-btn" onclick="document.getElementById('fileInput').click()" title="Upload Files">
+                <svg class="btn-icon" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <div class="file-header">
+        <div>Icon</div>
+        <div class="sort-header" onclick="sortData('file')">File Name <span class="sort-arrow">▲</span></div>
+        <div class="sort-header" onclick="sortData('date')">Upload Date <span class="sort-arrow">▲</span></div>
+        <div class="sort-header" onclick="sortData('size')">Size <span class="sort-arrow">▲</span></div>
+        <div></div>
+    </div>
+
+    <div id="file-list" style="flex: 1; padding-bottom: 50px;"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script>
+    // --- Global State ---
+    let cachedFiles = [];
+    let currentSort = { key: null, asc: true };
+    let selectedFiles = new Set(); // Stores filenames
+    let sessionToken = null; // Store the session token
+
+    // --- Drag Selection Variables ---
+    let isSelecting = false;
+    let startX = 0, startY = 0;
+    const selectionBox = document.getElementById('selection-box');
+    const mainCard = document.getElementById('mainCard');
+
+    document.addEventListener("DOMContentLoaded", () => {
+        // Load token from localStorage or sessionStorage
+        sessionToken = localStorage.getItem('sessionToken') || sessionStorage.getItem('sessionToken');
+
+        if (!sessionToken) {
+            // Redirect to login if no token
+            window.location.href = '/login';
+            return;
+        }
+
+        loadFiles();
+        initDragUpload();
+        initDragSelection();
+    });
+
+    // Helper function to get auth headers
+    function getAuthHeaders(additionalHeaders = {}) {
+        const headers = { ...additionalHeaders };
+        if (sessionToken) {
+            headers['X-Session-Token'] = sessionToken;
+        }
+        return headers;
+    }
+
+    // Helper function to handle auth errors
+    function handleAuthError(response) {
+        if (response.status === 401) {
+            // Clear token and redirect to login
+            localStorage.removeItem('sessionToken');
+            sessionStorage.removeItem('sessionToken');
+            sessionToken = null;
+            showToast('Session expired. Please log in again.', 'error');
+            setTimeout(() => {
+                window.location.href = '/login';
+            }, 1500);
+            return true;
+        }
+        return false;
+    }
+
+    function openDeleteModal(fileName) {
+        // Clear any previous selection and add just this one file
+        clearSelection();
+        selectedFiles.add(fileName);
+
+        // Set up the modal message
+        document.getElementById('modalMessage').textContent = `Are you sure you want to delete "${fileName}"?`;
+
+        // Prepare the filesToDelete array for executeDelete()
+        filesToDelete = [fileName];
+
+        document.getElementById('deleteModal').classList.add('show');
+    }
+
+    // --- Drag Selection Logic ---
+    function initDragSelection() {
+        // Mousedown: Start selection
+        window.addEventListener('mousedown', (e) => {
+            // Ignore clicks on buttons, inputs, or scrollbars
+            if (e.target.closest('button') || e.target.closest('input') || e.target.closest('.file-item')) return;
+
+            // Only start if clicking inside the main card (or body if you prefer full page)
+            if (!mainCard.contains(e.target) && e.target !== document.body) return;
+
+            isSelecting = true;
+            startX = e.clientX;
+            startY = e.clientY;
+
+            // Clear previous selection unless Shift/Ctrl is held (optional, simpler to clear)
+            if(!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                clearSelection();
+            }
+
+            selectionBox.style.left = startX + 'px';
+            selectionBox.style.top = startY + 'px';
+            selectionBox.style.width = '0px';
+            selectionBox.style.height = '0px';
+            selectionBox.style.display = 'block';
+        });
+
+        // Mousemove: Update box and check collisions
+        window.addEventListener('mousemove', (e) => {
+            if (!isSelecting) return;
+
+            const currentX = e.clientX;
+            const currentY = e.clientY;
+
+            // Calculate dimensions
+            const width = Math.abs(currentX - startX);
+            const height = Math.abs(currentY - startY);
+            const left = Math.min(currentX, startX);
+            const top = Math.min(currentY, startY);
+
+            // Update visuals
+            selectionBox.style.width = width + 'px';
+            selectionBox.style.height = height + 'px';
+            selectionBox.style.left = left + 'px';
+            selectionBox.style.top = top + 'px';
+
+            // Check intersection with file items
+            checkSelectionCollision(left, top, width, height);
+        });
+
+        // Mouseup: End selection
+        window.addEventListener('mouseup', () => {
+            if (isSelecting) {
+                isSelecting = false;
+                selectionBox.style.display = 'none';
+                updateBulkActionBar();
+            }
+        });
+    }
+
+    function checkSelectionCollision(boxX, boxY, boxW, boxH) {
+        const items = document.querySelectorAll('.file-item');
+
+        items.forEach(item => {
+            const rect = item.getBoundingClientRect();
+            const fileName = item.getAttribute('data-filename');
+
+            // Simple rectangle intersection logic
+            const isOverlapping = !(rect.right < boxX ||
+                rect.left > boxX + boxW ||
+                rect.bottom < boxY ||
+                rect.top > boxY + boxH);
+
+            if (isOverlapping) {
+                selectedFiles.add(fileName);
+                item.classList.add('selected');
+            }
+        });
+    }
+
+    // Toggle single file selection on click (without dragging)
+    function toggleSelection(fileName, event) {
+        // If clicking a button inside the row, don't select the row
+        if(event.target.closest('button')) return;
+
+        const row = document.querySelector(`.file-item[data-filename="${fileName}"]`);
+
+        // Ctrl/Cmd click behavior
+        if (event.ctrlKey || event.metaKey) {
+            if (selectedFiles.has(fileName)) {
+                selectedFiles.delete(fileName);
+                row.classList.remove('selected');
+            } else {
+                selectedFiles.add(fileName);
+                row.classList.add('selected');
+            }
+        } else {
+            // Standard click: select only this one
+            clearSelection();
+            selectedFiles.add(fileName);
+            if(row) row.classList.add('selected');
+        }
+        updateBulkActionBar();
+    }
+
+    function clearSelection() {
+        selectedFiles.clear();
+        document.querySelectorAll('.file-item.selected').forEach(el => el.classList.remove('selected'));
+        updateBulkActionBar();
+    }
+
+    function updateBulkActionBar() {
+        const bar = document.getElementById('bulkActions');
+        const countSpan = document.getElementById('selectedCount');
+        const count = selectedFiles.size;
+
+        if (count > 0) {
+            bar.classList.add('show');
+            countSpan.textContent = `${count} selected`;
+        } else {
+            bar.classList.remove('show');
+        }
+    }
+
+    // --- Bulk Operations ---
+
+    async function bulkDownload() {
+        if (selectedFiles.size === 0) return;
+
+        // If only 1 file, do normal download
+        if (selectedFiles.size === 1) {
+            const fileName = Array.from(selectedFiles)[0];
+            downloadFile(fileName);
+            return;
+        }
+
+        showToast("Preparing bulk download...", "info");
+        const zip = new JSZip();
+        const filesArray = Array.from(selectedFiles);
+
+        try {
+            // Fetch all files with auth headers
+            const promises = filesArray.map(async (fileName) => {
+                const response = await fetch(`/download/${encodeURIComponent(fileName)}`, {
+                    headers: getAuthHeaders()
+                });
+
+                if (handleAuthError(response)) return;
+                if (!response.ok) throw new Error(`Failed to fetch ${fileName}`);
+
+                const blob = await response.blob();
+                zip.file(fileName, blob);
+            });
+
+            await Promise.all(promises);
+
+            const content = await zip.generateAsync({ type: "blob" });
+
+            // Create download link
+            const url = window.URL.createObjectURL(content);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `files_archive_${new Date().getTime()}.zip`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+
+            showToast("Download started", "success");
+            clearSelection();
+
+        } catch (err) {
+            console.error(err);
+            showToast("Error creating zip: " + err.message, "error");
+        }
+    }
+
+    let filesToDelete = [];
+
+    function confirmBulkDelete() {
+        console.log('selectedFiles Set:', selectedFiles);
+        console.log('selectedFiles size:', selectedFiles.size);
+
+        // Force refresh the filesToDelete array from the current selection Set
+        filesToDelete = Array.from(selectedFiles);
+
+        console.log('filesToDelete after Array.from:', filesToDelete);
+
+        if (filesToDelete.length === 0) {
+            showToast("No files selected to delete", "error");
+            return;
+        }
+
+        const msg = filesToDelete.length === 1
+            ? `Are you sure you want to delete "${filesToDelete[0]}"?`
+            : `Are you sure you want to delete ${filesToDelete.length} files?`;
+
+        document.getElementById('modalMessage').textContent = msg;
+        document.getElementById('deleteModal').classList.add('show');
+    }
+
+    async function executeDelete() {
+        // ALWAYS use the current selectedFiles Set
+        const filesToDelete = Array.from(selectedFiles);
+
+        if (filesToDelete.length === 0) {
+            showToast("No files selected", "error");
+            closeDeleteModal();
+            return;
+        }
+
+        closeDeleteModal();
+
+        showToast(`Deleting ${filesToDelete.length} file(s)...`, 'info');
+
+        try {
+            console.log('Files to delete:', filesToDelete);
+
+            // Send as comma-separated list in the URL path
+            const fileNamesList = filesToDelete.map(f => encodeURIComponent(f)).join(',');
+            const url = `/api/items/${fileNamesList}`;
+
+            console.log('DELETE URL:', url);
+
+            const response = await fetch(url, {
+                method: 'DELETE',
+                headers: getAuthHeaders({
+                    'Content-Type': 'application/json'
+                })
+            });
+
+            console.log('Response status:', response.status);
+
+            if (handleAuthError(response)) return;
+
+            const responseText = await response.text();
+            console.log('Response preview:', responseText.substring(0, 200));
+
+            if (responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html')) {
+                throw new Error(`Route not found (404). Express may not be forwarding the request correctly.`);
+            }
+
+            const result = JSON.parse(responseText);
+
+            if (result.status === 'success') {
+                showToast(`Deleted ${result.deleted_items?.length || filesToDelete.length} file(s) successfully`, 'success');
+                if (result.failed_items && result.failed_items.length > 0) {
+                    showToast(`Failed to delete: ${result.failed_items.join(', ')}`, 'error');
+                }
+                loadFiles();
+            } else {
+                const failedMsg = result.failed_items?.join(', ') || 'Unknown error';
+                showToast(`Delete failed: ${failedMsg}`, 'error');
+            }
+        } catch (err) {
+            console.error('Delete error:', err);
+            showToast('Error: ' + err.message, 'error');
+        }
+
+        // Reset selection state
+        clearSelection();
+    }
+
+    function closeDeleteModal() {
+        document.getElementById('deleteModal').classList.remove('show');
+        filesToDelete = [];
+    }
+
+    // --- Standard File Manager Logic ---
+
+    function showToast(message, type = 'success', duration = 4000) {
+        const container = document.getElementById('toast-container');
+        const toast = document.createElement('div');
+        toast.innerHTML = message;
+        toast.style.padding = "12px 20px";
+        toast.style.borderRadius = "8px";
+        toast.style.color = "#fff";
+        toast.style.fontWeight = "600";
+        toast.style.minWidth = "250px";
+        toast.style.boxShadow = "0 4px 12px rgba(0,0,0,0.2)";
+        toast.style.backgroundColor = type === 'success' ? "#4ade80" : (type === 'error' ? "#f87171" : "#60a5fa");
+        toast.style.opacity = "0";
+        toast.style.transform = "translateX(100%)";
+        toast.style.transition = "all 0.3s ease";
+        toast.style.display = "flex";
+        toast.style.alignItems = "center";
+        container.appendChild(toast);
+        requestAnimationFrame(() => { toast.style.opacity = "1"; toast.style.transform = "translateX(0)"; });
+        setTimeout(() => { toast.style.opacity = "0"; toast.style.transform = "translateX(100%)"; setTimeout(() => toast.remove(), 300); }, duration);
+    }
+
+    async function loadFiles() {
+        try {
+            const response = await fetch("/api/items/info", {
+                headers: getAuthHeaders()
+            });
+
+            if (handleAuthError(response)) return;
+
+            const data = await response.json();
+            cachedFiles = data.items || [];
+
+            // Re-apply sort if active
+            if(currentSort.key) {
+                const key = currentSort.key;
+                sortFilesArray(key);
+            }
+
+            renderFiles(cachedFiles);
+        } catch (err) {
+            console.error("Failed to load files:", err);
+            showToast("Failed to load files", "error");
+        }
+    }
+
+    function sortData(key) {
+        if (currentSort.key === key) currentSort.asc = !currentSort.asc;
+        else { currentSort.key = key; currentSort.asc = true; }
+
+        // UI Updates
+        document.querySelectorAll('.sort-header').forEach(el => {
+            el.classList.remove('active', 'desc');
+            if (el.textContent.toLowerCase().includes(key.replace('file', 'name'))) {
+                el.classList.add('active');
+                if (!currentSort.asc) el.classList.add('desc');
+            }
+        });
+
+        sortFilesArray(key);
+        renderFiles(cachedFiles);
+    }
+
+    function sortFilesArray(key) {
+    cachedFiles.sort((a, b) => {
+        let valA, valB;
+
+        if (key === 'date') {
+            valA = new Date(a.upload_time.raw);
+            valB = new Date(b.upload_time.raw);
+        } else if (key === 'size') {
+            valA = a.size.raw;
+            valB = b.size.raw;
+        } else {
+            valA = a.file.toLowerCase();
+            valB = b.file.toLowerCase();
+        }
+
+        if (valA < valB) return currentSort.asc ? -1 : 1;
+        if (valA > valB) return currentSort.asc ? 1 : -1;
+        return 0;
+    });
+}
+
+    function renderFiles(files) {
+        const fileList = document.getElementById("file-list");
+        fileList.innerHTML = "";
+
+        files.forEach(item => {
+            const row = document.createElement("div");
+            row.className = "file-item";
+            // Add identifying attribute for selection logic
+            row.setAttribute('data-filename', item.file);
+
+            // Restore selected state if reloading
+            if (selectedFiles.has(item.file)) {
+                row.classList.add('selected');
+            }
+
+            // Click listener for row selection
+            row.onclick = (e) => toggleSelection(item.file, e);
+
+            const fileIcon = document.createElement("div");
+            fileIcon.innerHTML = `<img src="/get-icon?relative_path=${encodeURIComponent(item.file)}" alt="icon" style="width: 24px; height: 24px; object-fit: contain;">`;
+
+            const fileName = document.createElement("div");
+            fileName.textContent = item.file;
+            fileName.style.overflow = "hidden";
+            fileName.style.textOverflow = "ellipsis";
+            fileName.style.whiteSpace = "nowrap";
+
+            const fileDate = document.createElement("div");
+            fileDate.textContent = item.upload_time.formatted;
+
+            const fileSize = document.createElement("div");
+            fileSize.textContent = item.size.formatted;
+
+            const buttonContainer = document.createElement("div");
+            buttonContainer.style.cssText = "display: flex; gap: 8px;";
+
+            const downloadBtn = document.createElement("button");
+            downloadBtn.className = "download-btn";
+            downloadBtn.title = "Download";
+            downloadBtn.onclick = (e) => { e.stopPropagation(); downloadFile(item.file); }; // Stop prop so we don't select row
+            downloadBtn.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`;
+
+            const deleteBtn = document.createElement("button");
+            deleteBtn.className = "delete-btn";
+            deleteBtn.title = "Delete";
+            deleteBtn.onclick = (e) => { e.stopPropagation(); openDeleteModal(item.file); };
+            deleteBtn.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>`;
+
+            buttonContainer.appendChild(downloadBtn);
+            buttonContainer.appendChild(deleteBtn);
+
+            row.appendChild(fileIcon);
+            row.appendChild(fileName);
+            row.appendChild(fileDate);
+            row.appendChild(fileSize);
+            row.appendChild(buttonContainer);
+
+            fileList.appendChild(row);
+        });
+    }
+
+    function downloadFile(filename) {
+        // Force .zip only if no extension
+        let downloadName = filename;
+        if (!filename.includes('.') || !filename.split('.').pop()) {
+            downloadName += '.zip';
+        }
+
+        fetch(`/download/${encodeURIComponent(filename)}`, {
+            headers: getAuthHeaders()
+        })
+        .then(response => {
+            if (handleAuthError(response)) return;
+            if (!response.ok) throw new Error('Download failed');
+            return response.blob();
+        })
+        .then(blob => {
+            if (!blob) return;
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = downloadName; // <-- use the fixed name here
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        })
+        .catch(err => {
+            console.error('Download error:', err);
+            showToast('Download failed', 'error');
+        });
+    }
+
+
+    function initDragUpload() {
+        const dropZone = document.querySelector('.card');
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, (e) => { e.preventDefault(); e.stopPropagation(); }, false);
+        });
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.add('drag-over'), false);
+        });
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.remove('drag-over'), false);
+        });
+        dropZone.addEventListener("drop", async (e) => {
+            const items = e.dataTransfer.items;
+            if (!items) return;
+            const collectedFiles = [];
+
+            async function traverseEntry(entry, path = "") {
+                return new Promise((resolve) => {
+                    if (entry.isFile) {
+                        entry.file(file => {
+                            file.relativePath = path + file.name;
+                            collectedFiles.push(file);
+                            resolve();
+                        });
+                    } else if (entry.isDirectory) {
+                        const reader = entry.createReader();
+                        reader.readEntries(async (entries) => {
+                            for (const ent of entries) await traverseEntry(ent, path + entry.name + "/");
+                            resolve();
+                        });
+                    }
+                });
+            }
+            const traversePromises = [];
+            for (let i = 0; i < items.length; i++) {
+                const entry = items[i].webkitGetAsEntry();
+                if (entry) traversePromises.push(traverseEntry(entry));
+            }
+            await Promise.all(traversePromises);
+            if (collectedFiles.length > 0) {
+                handleFileUpload({ target: { files: collectedFiles } });
+            }
+        });
+    }
+
+    async function handleFileUpload(event) {
+        const files = event.target.files;
+        if (!files || files.length === 0) return;
+        try {
+            const existingResponse = await fetch("/api/items", {
+                headers: getAuthHeaders()
+            });
+
+            if (handleAuthError(existingResponse)) return;
+
+            const existingData = await existingResponse.json();
+            const existingItems = existingData.items || [];
+            const conflicts = [];
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                if (existingItems.includes(file.name)) conflicts.push(file.name);
+            }
+            if (conflicts.length > 0) {
+                showToast(`Upload blocked. Exists: ${conflicts.join(", ")}`, "error");
+                return;
+            }
+            const zip = new JSZip();
+            for (let i = 0; i < files.length; i++) {
+                zip.file(files[i].relativePath || files[i].webkitRelativePath || files[i].name, files[i]);
+            }
+            const zipBlob = await zip.generateAsync({ type: "blob" });
+            const formData = new FormData();
+            formData.append("files", zipBlob, "upload.zip");
+
+            const response = await fetch("/upload/files", {
+                method: "POST",
+                body: formData,
+                headers: getAuthHeaders()
+            });
+
+            if (handleAuthError(response)) return;
+
+            const result = await response.json();
+            if (result.status === "success") {
+                showToast("Upload successful!", "success");
+                loadFiles();
+            } else {
+                showToast(result.error || "Upload failed", "error");
+            }
+        } catch (err) {
+            console.error(err);
+            showToast("Error: " + err.message, "error");
+        }
+        finally {
+            event.target.value = "";
+        }
+    }
+
+    function filterFilesByName() {
+        const query = document.getElementById("fileSearch").value.toLowerCase();
+        const filtered = cachedFiles.filter(file => file.file.toLowerCase().includes(query));
+        renderFiles(filtered);
+    }
+
+    // Optional: Add logout function
+    function logout() {
+        localStorage.removeItem('sessionToken');
+        sessionStorage.removeItem('sessionToken');
+        sessionToken = null;
+        window.location.href = '/login';
+    }
+</script>
+
+</body>
+</html>
