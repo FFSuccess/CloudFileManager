@@ -69,32 +69,22 @@ def zip_file(output_name, archive_format, target_file):
 
 def extract_zip(output_path, target_path):
     with zipfile.ZipFile(target_path, 'r') as zip_ref:
-
-        # Normalize output path once
         output_path = os.path.abspath(output_path)
-
-        # 1️⃣ Pre-scan for collisions
+        # scan for collisions
         for member in zip_ref.namelist():
-            # Skip directory entries
             if member.endswith("/"):
                 continue
-
             dest_path = os.path.abspath(os.path.join(output_path, member))
-
-            # Security: prevent zip-slip
+            # prevent zip-slip
             if not dest_path.startswith(output_path + os.sep):
                 raise ValueError(f"Illegal path in zip: {member}")
-
-            # Check if file OR parent folder exists
+            # check if file ir parent folder exists
             if os.path.exists(dest_path):
                 raise FileExistsError(f"File already exists: {dest_path}")
-
-            # Also block folder collisions
+            # block folder collisions
             parent_dir = os.path.dirname(dest_path)
             if os.path.exists(parent_dir) and not os.path.isdir(parent_dir):
                 raise FileExistsError(f"Path collision: {parent_dir}")
-
-        # 2️⃣ Safe to extract
         zip_ref.extractall(output_path)
 
 def get_file_icon(file_path, size=64):
@@ -116,8 +106,6 @@ def get_file_icon(file_path, size=64):
                 ("szDisplayName", ctypes.c_wchar * 260),
                 ("szTypeName", ctypes.c_wchar * 80)
             ]
-
-        # Get the icon handle
         shfileinfo = SHFILEINFO()
         flags = SHGFI_ICON | (SHGFI_SMALLICON if size <= 32 else SHGFI_LARGEICON)
         ctypes.windll.shell32.SHGetFileInfoW(
@@ -128,35 +116,27 @@ def get_file_icon(file_path, size=64):
             flags
         )
         hicon = shfileinfo.hIcon
-
-        # Create compatible DC
+        # compatible DC
         hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
         hdc_mem = hdc.CreateCompatibleDC()
-
-        # Create 32-bit bitmap for alpha channel
+        # 32-bit bitmap
         hbmp = win32ui.CreateBitmap()
         hbmp.CreateCompatibleBitmap(hdc, size, size)
         hdc_mem.SelectObject(hbmp)
-
-        # Fill bitmap with transparency
+        # fill bitmap with transparency
         brush = win32gui.GetStockObject(win32con.WHITE_BRUSH)
         win32gui.FillRect(hdc_mem.GetSafeHdc(), (0, 0, size, size), brush)
-
-        # Draw icon into bitmap
+        # draw icon into bitmap
         win32gui.DrawIconEx(hdc_mem.GetSafeHdc(), 0, 0, hicon, size, size, 0, 0, win32con.DI_NORMAL)
-
-        # Convert bitmap to bytes
+        # convert bitmap to bytes
         bmpinfo = hbmp.GetInfo()
         bmpstr = hbmp.GetBitmapBits(True)
-
-        # Create RGBA image to preserve transparency
+        # RGBA image preserve transparency
         img = Image.frombuffer(
             'RGBA',
             (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
             bmpstr, 'raw', 'BGRA', 0, 1
         )
-
-        # Cleanup
         win32gui.DestroyIcon(hicon)
         hdc_mem.DeleteDC()
         hdc.DeleteDC()
@@ -248,10 +228,7 @@ class SessionManager:
         self.session_timeout = timedelta(minutes=session_timeout_minutes)
 
     def create_session(self, user_id: str) -> str:
-        # Generate a secure random token
         token = secrets.token_urlsafe(32)
-
-        # Store session information
         self.sessions[token] = {
             "user_id": user_id,
             "created_at": datetime.now(),
@@ -302,13 +279,11 @@ def authenticate(user: str = None, password: str = None, session_token: str = No
 @app.middleware("http")
 async def check_session_token_middleware(request: Request, call_next):
     protected_paths = ("/api", "/download", "/upload")
-
-    # Only enforce token if the request path starts with a protected path
+    # only enforce token if the request path starts with a protected path
     if request.url.path.startswith(protected_paths):
         token = request.headers.get("X-Session-Token")
         if not token or not current_session.validate_session(token):
             return JSONResponse({"detail": "Invalid or missing session token"}, status_code=401)
-
     response = await call_next(request)
     return response
 
