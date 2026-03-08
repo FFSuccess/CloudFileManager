@@ -12,6 +12,7 @@ if not os.path.exists(HASHED_PASSWORDS_FILE):
 # Get user input
 user_name = input("Enter username: ")
 password = input("Enter password: ")
+user_id = ""
 
 # Flag to track if login succeeds
 login_success = False
@@ -21,7 +22,7 @@ with open(HASHED_PASSWORDS_FILE, "r") as password_file:
     for line in password_file:
         # Each line is in the format: base64username:hashed_password
         try:
-            encoded_username, hashed_password = line.strip().split(":", 1)
+            encoded_username, hashed_password, current_user_id = line.strip().split(":", 2)
         except ValueError:
             continue  # skip malformed lines
 
@@ -30,9 +31,11 @@ with open(HASHED_PASSWORDS_FILE, "r") as password_file:
         if decoded_username == user_name:
             if checkpw(password.encode("utf-8"), hashed_password.encode("utf-8")):
                 login_success = True
+            user_id = current_user_id
             break  # stop checking after finding the user
 
 if login_success:
     print(f"Login successful! Welcome {user_name}.")
+    print(f"{user_name=}\n{password=}\n{user_id=}")
 else:
     print("Invalid username or password.")
