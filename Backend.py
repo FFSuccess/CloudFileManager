@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, Request
+from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
@@ -98,12 +98,19 @@ def format_size(size_bytes: int) -> str:
         size_bytes /= 1024
     return f"{size_bytes:.2f} PB"
 
-def get_file_info(storage_folder, filename: str) -> dict:
-    path = os.path.join(storage_folder, filename)
+
+def get_file_info(storage_folder, filename: str | None, parent_relative: str = "") -> dict:
+    path = storage_folder
+    if filename:
+        path = os.path.join(storage_folder, filename)
 
     if not os.path.exists(path):
         raise FileNotFoundError(filename)
 
+    # Compute relative path from storage root
+    relative_path = os.path.join(parent_relative, filename) if filename else ""
+
+    # Compute size
     if os.path.isdir(path):
         sum_size = 0
         for root_folder, dirs, files in os.walk(path):
@@ -121,6 +128,8 @@ def get_file_info(storage_folder, filename: str) -> dict:
 
     return {
         "file": filename,
+        "relative_path": relative_path.replace("\\", "/"),  # Use forward slashes for URLs
+        "is_folder": os.path.isdir(path),
         "size": {
             "formatted": format_size(size_bytes),
             "raw": size_bytes,
@@ -248,6 +257,17 @@ async def get_all_items(request: Request):
     storage_folder_to_user = getattr(request.state, "user_storage_folder", None)
     return {"items": list_all_items(storage_folder_to_user)}
 
+@app.get("api/items/subfolders")
+async def get_items_in_folder(request: Request, relative_path: str):
+    storage_folder_to_user = getattr(request.state, "user_storage_folder", None)
+    relative_path = os.path.normpath(relative_path)
+    path_to_list = os.path.join(storage_folder_to_user, relative_path)
+    if not os.path.exists(path_to_list):
+        return HTTPException(status_code=404, detail=f"Path {relative_path} does not exist")
+    if not os.path.isdir(path_to_list):
+        return HTTPException(status_code=404, detail=f"Path {relative_path} is not a folder")
+    return {"items": list_all_items(storage_folder_to_user)}
+
 @app.get("/api/items/info")
 async def get_all_items_info(request: Request):
     storage_folder_to_user = getattr(request.state, "user_storage_folder", None)
@@ -255,6 +275,18 @@ async def get_all_items_info(request: Request):
     return {
         "items": [get_file_info(storage_folder_to_user, item) for item in items]
     }
+
+@app.get("/api/items/info/subfolders")
+async def get_infos_from_folder(request: Request, relative_path: str):
+    storage_folder_to_user = getattr(request.state, "user_storage_folder", None)
+    relative_path = os.path.normpath(relative_path)
+    path_to_list = os.path.join(storage_folder_to_user, relative_path)
+    if not os.path.exists(path_to_list):
+        return HTTPException(status_code=404, detail=f"Path {relative_path} does not exist")
+    if not os.path.isdir(path_to_list):
+        return HTTPException(status_code=404, detail=f"Path {relative_path} is not a folder")
+    items = list_all_items(path_to_list)
+    return {"items": [get_file_info(path_to_list, item) for item in items]}
 
 @app.get("/login")
 async def try_login(user_name: str, password: str):
@@ -298,11 +330,15 @@ async def delete_item(request: Request, item_names: str):
     return delete_items(storage_folder_to_user, names)
 
 @app.get("/download/{filename}")
-async def download_file(request: Request, filename: str):
+async def download_file(request: Request, filename: str, relative_path: str | None = None):
     storage_folder_to_user = getattr(request.state, "user_storage_folder", None)
+    full_path = storage_folder_to_user
+    if relative_path:
+        relative_path = os.path.normpath(relative_path)
+        full_path = os.path.join(storage_folder_to_user, relative_path)
     try:
         format_path = os.path.normpath(filename)
-        file_path = os.path.join(storage_folder_to_user, format_path)
+        file_path = os.path.join(full_path, format_path)
 
         if not os.path.isdir(file_path):
             return FileResponse(
@@ -312,7 +348,7 @@ async def download_file(request: Request, filename: str):
             )
         else:
             archive_name = os.path.basename(format_path)
-            archive_file_path = zip_file(storage_folder_to_user, format_path, ARCHIVE_EXTENTION, archive_name)
+            archive_file_path = zip_file(full_path, format_path, ARCHIVE_EXTENTION, archive_name)
             return FileResponse(
                 path=archive_file_path,
                 filename=f"{archive_name}.{ARCHIVE_EXTENTION}",
@@ -324,7 +360,7 @@ async def download_file(request: Request, filename: str):
         HTTPException(status_code=404, detail=f"Error getting file: {e}")
 
 @app.get("/icon")
-async def get_icon(request: Request, relative_path: str):
+async def get_icon(relative_path: str):
     try:
         path = Path(relative_path)
 
