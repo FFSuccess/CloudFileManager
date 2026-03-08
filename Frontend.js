@@ -7,7 +7,12 @@ const FormData = require('form-data');
 const { readFile } = require('fs').promises;
 
 const app = express();
-app.use(express.json());
+app.use((req, res, next) => {
+    req.user_name = req.headers['x-username'] || req.query.user_name || null;
+    req.password = req.headers['x-password'] || req.query.password || null;
+    console.log("Express received:", req.user_name, req.password); // Add this!
+    next();
+});
 
 const BACKEND_URL = "http://localhost:8000"; // FastAPI backend
 const TEMP_UPLOAD_DIR = path.join(__dirname, "temp_uploads");
@@ -19,7 +24,7 @@ if (!fs.existsSync(TEMP_UPLOAD_DIR)) fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: 
 // Multer for ZIP uploads
 const upload = multer({
     dest: TEMP_UPLOAD_DIR,
-    limits: { fileSize: 1024 * 1024 * 1024 } // 1GB
+    limits: { fileSize: 1024 * 1024 * 1024 * 1024} // 1TB
 });
 
 // Helper: get session token
@@ -29,10 +34,11 @@ function getSessionToken(req) {
     return req.headers['x-session-token'] || null;
 }
 
-// Helper: create headers
 function getAuthHeaders(req, extra = {}) {
     const token = getSessionToken(req);
     const headers = { ...extra };
+    if (req.user_name) headers['X-Username'] = req.user_name;
+    if (req.password) headers['X-Password'] = req.password;
     if (token) headers['X-Session-Token'] = token;
     return headers;
 }
@@ -53,7 +59,10 @@ async function serveHTML(res, filePath) {
 app.get('/api/login', async (req, res) => {
     try {
         const { user_name, password } = req.query;
-        const response = await axios.get(`${BACKEND_URL}/login`, { params: { user_name, password } });
+        const response = await axios.get(`${BACKEND_URL}/login`, {
+            params: { user_name, password },
+            headers: getAuthHeaders(req) // Add this!
+        });
         res.status(response.status).json(response.data);
     } catch (err) {
         console.error(err);
@@ -186,7 +195,7 @@ app.get("/get-icon", async (req, res) => {
         const response = await axios.get(`${BACKEND_URL}/icon`, {
             params: { relative_path: req.query.relative_path },
             responseType: 'arraybuffer',
-            headers
+            headers: getAuthHeaders(req)
         });
 
         res.setHeader("Content-Type", "image/png");
