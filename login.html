@@ -155,6 +155,44 @@
             display: block;
         }
 
+        /* Autofill indicator badge */
+        .autofill-badge {
+            display: none;
+            align-items: center;
+            gap: 6px;
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            color: #2563eb;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-bottom: 20px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .autofill-badge.show {
+            display: flex;
+        }
+
+        .autofill-badge .spinner {
+            width: 14px;
+            height: 14px;
+            border: 2px solid #bfdbfe;
+            border-top-color: #2563eb;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            flex-shrink: 0;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-4px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
         .divider {
             text-align: center;
             margin: 24px 0;
@@ -178,6 +216,25 @@
             font-size: 13px;
             position: relative;
         }
+
+        /*
+         * CSS autofill detection trick:
+         * When the browser autofills an input, it applies the :-webkit-autofill
+         * pseudo-class. We attach a dummy animation to that state so JS can
+         * listen for the animationstart event as a reliable autofill signal.
+         */
+        @keyframes onAutoFillStart  { from {} to {} }
+        @keyframes onAutoFillCancel { from {} to {} }
+
+        input:-webkit-autofill {
+            animation-name: onAutoFillStart;
+            animation-duration: 1ms;
+        }
+
+        input:not(:-webkit-autofill) {
+            animation-name: onAutoFillCancel;
+            animation-duration: 1ms;
+        }
     </style>
 </head>
 <body>
@@ -187,8 +244,12 @@
         <p>Sign in to access your files</p>
     </div>
 
-    <div id="errorMessage" class="error-message"></div>
+    <div id="errorMessage"   class="error-message"></div>
     <div id="successMessage" class="success-message"></div>
+    <div id="autofillBadge"  class="autofill-badge">
+        <span class="spinner"></span>
+        <span>Credentials detected — signing you in…</span>
+    </div>
 
     <form id="loginForm">
         <div class="form-group">
@@ -227,72 +288,150 @@
 </div>
 
 <script>
-    const loginForm = document.getElementById('loginForm');
-    const loginBtn = document.getElementById('loginBtn');
-    const errorMessage = document.getElementById('errorMessage');
+    const loginForm      = document.getElementById('loginForm');
+    const loginBtn       = document.getElementById('loginBtn');
+    const errorMessage   = document.getElementById('errorMessage');
     const successMessage = document.getElementById('successMessage');
+    const autofillBadge  = document.getElementById('autofillBadge');
+    const usernameInput  = document.getElementById('username');
+    const passwordInput  = document.getElementById('password');
 
-    // Check if already logged in
+    // ── 0. Redirect if already logged in ────────────────────────────────────
     const existingToken = localStorage.getItem('sessionToken') || sessionStorage.getItem('sessionToken');
     if (existingToken) {
         window.location.href = '/';
     }
 
-    loginForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-
-        const username = document.getElementById('username').value;
-        const password = document.getElementById('password').value;
-        const rememberMe = document.getElementById('rememberMe').checked;
-
-        // Hide previous messages
+    // ── 1. Core login function (shared by manual submit & autofill) ──────────
+    async function attemptLogin({ username, password, rememberMe = false, isAutofill = false } = {}) {
         errorMessage.classList.remove('show');
         successMessage.classList.remove('show');
 
-        // Disable button
-        loginBtn.disabled = true;
-        loginBtn.textContent = 'Signing in...';
+        loginBtn.disabled    = true;
+        loginBtn.textContent = 'Signing in…';
 
         try {
             const response = await fetch(
                 `/api/login?user_name=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
             );
-
             const data = await response.json();
 
             if (response.ok && data.status === 'success' && data.token) {
-                // Store token
                 if (rememberMe) {
                     localStorage.setItem('sessionToken', data.token);
                 } else {
                     sessionStorage.setItem('sessionToken', data.token);
                 }
 
-                // Show success
-                successMessage.textContent = 'Login successful! Redirecting...';
+                autofillBadge.classList.remove('show');
+                successMessage.textContent = isAutofill
+                    ? 'Autofill detected — logged in! Redirecting…'
+                    : 'Login successful! Redirecting…';
                 successMessage.classList.add('show');
 
-                // Redirect to home
-                setTimeout(() => {
-                    window.location.href = '/';
-                }, 1000);
-
+                setTimeout(() => { window.location.href = '/'; }, 1000);
             } else {
-                // Show error
+                autofillBadge.classList.remove('show');
                 errorMessage.textContent = data.message || 'Invalid username or password';
                 errorMessage.classList.add('show');
-                loginBtn.disabled = false;
+                loginBtn.disabled    = false;
                 loginBtn.textContent = 'Sign In';
             }
-
         } catch (err) {
             console.error('Login error:', err);
+            autofillBadge.classList.remove('show');
             errorMessage.textContent = 'Connection error. Please try again.';
             errorMessage.classList.add('show');
-            loginBtn.disabled = false;
+            loginBtn.disabled    = false;
             loginBtn.textContent = 'Sign In';
         }
+    }
+
+    // ── 2. Manual form submit ────────────────────────────────────────────────
+    loginForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        attemptLogin({
+            username:   usernameInput.value,
+            password:   passwordInput.value,
+            rememberMe: document.getElementById('rememberMe').checked,
+            isAutofill: false,
+        });
     });
+
+    // ── 3. Autofill detection ────────────────────────────────────────────────
+    //
+    // Strategy A — CSS animationstart trick (Chrome, Edge, Safari, Firefox)
+    // The CSS above fires "onAutoFillStart" when :-webkit-autofill is applied.
+    // We track which fields have been autofilled; when BOTH are filled we log in.
+    //
+    // Strategy B — polling fallback (catches browsers that skip the animation)
+    // Every 300 ms for the first 3 s after page load we check whether both
+    // inputs have a non-empty value that the user never typed (no input event).
+
+    let autofillState = { username: false, password: false };
+    let autofillLoginScheduled = false;
+
+    function handleAutofillDetected(fieldName) {
+        autofillState[fieldName] = true;
+
+        if (autofillState.username && autofillState.password && !autofillLoginScheduled) {
+            autofillLoginScheduled = true;
+            autofillBadge.classList.add('show');
+
+            // Small delay lets the browser finish populating the values
+            setTimeout(() => {
+                attemptLogin({
+                    username:   usernameInput.value,
+                    password:   passwordInput.value,
+                    rememberMe: document.getElementById('rememberMe').checked,
+                    isAutofill: true,
+                });
+            }, 600);
+        }
+    }
+
+    // Strategy A: CSS animation event
+    [usernameInput, passwordInput].forEach(input => {
+        input.addEventListener('animationstart', (e) => {
+            if (e.animationName === 'onAutoFillStart') {
+                handleAutofillDetected(input.name);
+            }
+            if (e.animationName === 'onAutoFillCancel') {
+                autofillState[input.name] = false;
+            }
+        });
+    });
+
+    // Strategy B: Polling fallback (runs for 3 s, 300 ms interval)
+    // Only triggers if the user hasn't manually typed into either field yet.
+    let userHasTyped = false;
+    [usernameInput, passwordInput].forEach(input => {
+        input.addEventListener('input', () => { userHasTyped = true; });
+    });
+
+    const pollStart    = Date.now();
+    const pollInterval = setInterval(() => {
+        if (autofillLoginScheduled || userHasTyped) {
+            clearInterval(pollInterval);
+            return;
+        }
+        if (Date.now() - pollStart > 3000) {
+            clearInterval(pollInterval);
+            return;
+        }
+
+        const uFilled = usernameInput.value.length > 0;
+        const pFilled = passwordInput.value.length > 0;
+
+        if (uFilled) autofillState.username = true;
+        if (pFilled) autofillState.password = true;
+
+        if (uFilled && pFilled) {
+            clearInterval(pollInterval);
+            handleAutofillDetected('username'); // will no-op if already scheduled
+            handleAutofillDetected('password');
+        }
+    }, 300);
 </script>
 </body>
 </html>
