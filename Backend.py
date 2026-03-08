@@ -1,29 +1,32 @@
-from fastapi import FastAPI, HTTPException, File, UploadFile, Query, Header, Depends, Request
+from fastapi import FastAPI, File, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 import uvicorn
 import os
-from datetime import datetime
 from typing import List
 import shutil
-from PIL import Image
-import io
-import sys
-import ctypes
-import win32gui, win32ui, win32con
 import zipfile
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional, Dict
-from bcrypt import gensalt, hashpw, checkpw
-from starlette.responses import FileResponse
+from bcrypt import gensalt, checkpw
 from base64 import b64decode
 from fastapi.responses import JSONResponse
+from fastapi import Request, HTTPException
+from fastapi.responses import FileResponse
+from pathlib import Path
 
-STORAGE_FOLDER = "Storage_folder"
 TEMPORARY_FOLDER = 'TEMP'
 ARCHIVE_EXTENTION = 'zip'
 HASHED_PASSWORDS_FILE = 'Passwords.txt'
+ICONS_DIR = Path("Icons")
+ICON_GROUPS = {
+    "xlsx": ["xls", "xlsx", "xlsm", "ods", "csv"],
+    "docx": ["doc", "docx", "odt", "rtf", "txt"],
+    "pdf": ["pdf"],
+    "jpeg": ["jpg", "jpeg", "jpe"],
+    "png": ["png"],
+    "zip": ["zip", "rar", "7z", "tar", "gz"],
+}
 if not os.path.exists(HASHED_PASSWORDS_FILE):
     with open(HASHED_PASSWORDS_FILE, "w+") as password_file:
         pass
@@ -39,33 +42,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def resolve_icon(ext: str) -> str:
+    for icon, exts in ICON_GROUPS.items():
+        if ext in exts:
+            return f"{icon}.png"
+    return "file.png"
+
 def check_user_login(user_name: str, password: str):
-    with open(HASHED_PASSWORDS_FILE, "r") as password_file:
-        for line in password_file:
+    with open(HASHED_PASSWORDS_FILE, "r") as current_password_file:
+        for line in current_password_file:
             # Each line is in the format: base64username:hashed_password
             try:
-                encoded_username, hashed_password = line.strip().split(":", 1)
+                encoded_username, hashed_password, user_id = line.strip().split(":", 2)
             except ValueError:
                 continue
             decoded_username = b64decode(encoded_username.encode("utf-8")).decode("utf-8")
             if decoded_username == user_name:
                 if checkpw(password.encode("utf-8"), hashed_password.encode("utf-8")):
-                    return True
+                    return user_id
                 return False
         return False
 
-def is_file(path):
-    try:
-        with open(path, "rb") as file:
-            pass
-        return True
-    except:
-        return False
-
-def zip_file(output_name, archive_format, target_file):
-    target_path = os.path.join(STORAGE_FOLDER, target_file)
+def zip_file(storage_folder, output_name, archive_format, target_file):
+    target_path = os.path.join(storage_folder, target_file)
     tempory_path = os.path.join(TEMPORARY_FOLDER, output_name)
-    return shutil.make_archive(tempory_path, archive_format, target_path)
+    return shutil.make_archive(tempory_path, archive_format, str(target_path))
 
 def extract_zip(output_path, target_path):
     with zipfile.ZipFile(target_path, 'r') as zip_ref:
@@ -87,70 +88,8 @@ def extract_zip(output_path, target_path):
                 raise FileExistsError(f"Path collision: {parent_dir}")
         zip_ref.extractall(output_path)
 
-def get_file_icon(file_path, size=64):
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"File {file_path} not found")
-
-    if sys.platform.startswith("win"):
-
-
-        SHGFI_ICON = 0x100
-        SHGFI_LARGEICON = 0x0
-        SHGFI_SMALLICON = 0x1
-
-        class SHFILEINFO(ctypes.Structure):
-            _fields_ = [
-                ("hIcon", ctypes.c_void_p),
-                ("iIcon", ctypes.c_int),
-                ("dwAttributes", ctypes.c_uint),
-                ("szDisplayName", ctypes.c_wchar * 260),
-                ("szTypeName", ctypes.c_wchar * 80)
-            ]
-        shfileinfo = SHFILEINFO()
-        flags = SHGFI_ICON | (SHGFI_SMALLICON if size <= 32 else SHGFI_LARGEICON)
-        ctypes.windll.shell32.SHGetFileInfoW(
-            file_path,
-            0,
-            ctypes.byref(shfileinfo),
-            ctypes.sizeof(shfileinfo),
-            flags
-        )
-        hicon = shfileinfo.hIcon
-        # compatible DC
-        hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
-        hdc_mem = hdc.CreateCompatibleDC()
-        # 32-bit bitmap
-        hbmp = win32ui.CreateBitmap()
-        hbmp.CreateCompatibleBitmap(hdc, size, size)
-        hdc_mem.SelectObject(hbmp)
-        # fill bitmap with transparency
-        brush = win32gui.GetStockObject(win32con.WHITE_BRUSH)
-        win32gui.FillRect(hdc_mem.GetSafeHdc(), (0, 0, size, size), brush)
-        # draw icon into bitmap
-        win32gui.DrawIconEx(hdc_mem.GetSafeHdc(), 0, 0, hicon, size, size, 0, 0, win32con.DI_NORMAL)
-        # convert bitmap to bytes
-        bmpinfo = hbmp.GetInfo()
-        bmpstr = hbmp.GetBitmapBits(True)
-        # RGBA image preserve transparency
-        img = Image.frombuffer(
-            'RGBA',
-            (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
-            bmpstr, 'raw', 'BGRA', 0, 1
-        )
-        win32gui.DestroyIcon(hicon)
-        hdc_mem.DeleteDC()
-        hdc.DeleteDC()
-        return img
-
-    else:
-        raise NotImplementedError("This version only handles Windows icons.")
-
-def ensure_storage_folder():
-    os.makedirs(STORAGE_FOLDER, exist_ok=True)
-
-def list_all_items() -> List[str]:
-    ensure_storage_folder()
-    return os.listdir(STORAGE_FOLDER)
+def list_all_items(storage_folder) -> List[str]:
+    return os.listdir(storage_folder)
 
 def format_size(size_bytes: int) -> str:
     for unit in ["B", "KB", "MB", "GB", "TB"]:
@@ -159,19 +98,19 @@ def format_size(size_bytes: int) -> str:
         size_bytes /= 1024
     return f"{size_bytes:.2f} PB"
 
-def get_file_info(filename: str) -> dict:
-    path = os.path.join(STORAGE_FOLDER, filename)
+def get_file_info(storage_folder, filename: str) -> dict:
+    path = os.path.join(storage_folder, filename)
 
     if not os.path.exists(path):
         raise FileNotFoundError(filename)
 
     if os.path.isdir(path):
         sum_size = 0
-        for root, dirs, files in os.walk(path):
+        for root_folder, dirs, files in os.walk(path):
             for file in files:
-                full_file_path = os.path.join(root, file)
+                full_file_path = os.path.join(root_folder, file)
                 try:
-                    sum_size += int(os.path.getsize(full_file_path))
+                    sum_size += os.path.getsize(full_file_path)
                 except FileNotFoundError:
                     pass
         size_bytes = sum_size
@@ -192,24 +131,24 @@ def get_file_info(filename: str) -> dict:
         },
     }
 
-def delete_items(item_names: List[str]) -> dict:
+def delete_items(storage_folder, item_names: List[str]) -> dict:
     print(item_names)
     deleted = []
     failed = []
 
     for name in item_names:
         try:
-            file_path = os.path.join(STORAGE_FOLDER, name)
+            file_path = os.path.join(storage_folder, name)
             if not os.path.isdir(file_path):
                 os.remove(file_path)
             else:
-                for root, dirs, files in os.walk(file_path):
+                for root_folder, dirs, files in os.walk(file_path):
                     for filename in files:
-                        delete_file_path = os.path.join(root, filename)
+                        delete_file_path = os.path.join(root_folder, filename)
                         os.remove(delete_file_path)
-                for root, dirs, files in os.walk(file_path):
+                for root_folder, dirs, files in os.walk(file_path):
                     for directory in dirs:
-                        os.rmdir(os.path.join(root, directory))
+                        os.rmdir(os.path.join(root_folder, directory))
                 os.rmdir(file_path)
             deleted.append(name)
         except Exception as e:
@@ -227,16 +166,17 @@ class SessionManager:
         self.sessions: Dict[str, dict] = {}
         self.session_timeout = timedelta(minutes=session_timeout_minutes)
 
-    def create_session(self, user_id: str) -> str:
+    def create_session(self, token_representation: str, user_storage_id: str) -> str:
         token = secrets.token_urlsafe(32)
         self.sessions[token] = {
-            "user_id": user_id,
+            "user_id": token_representation,
             "created_at": datetime.now(),
-            "last_active": datetime.now()
+            "last_active": datetime.now(),
+            "user_storage_id": user_storage_id,
         }
         return token
 
-    def validate_session(self, token: str) -> Optional[str]:
+    def validate_session(self, token: str) -> Optional[any]:
         if token not in self.sessions:
             return None
         session = self.sessions[token]
@@ -246,7 +186,7 @@ class SessionManager:
             return None
         # update last active time
         session["last_active"] = datetime.now()
-        return session["user_id"]
+        return session["user_id"], session["user_storage_id"]
 
     def delete_session(self, token: str) -> bool:
         if token in self.sessions:
@@ -268,22 +208,34 @@ current_session = SessionManager()
 
 def authenticate(user: str = None, password: str = None, session_token: str = None):
     if session_token:
-        if current_session.validate_session(session_token):
-            return True, session_token
+        validated = current_session.validate_session(session_token)
+        if validated:
+            user_id, storage_id = validated
+            return True, session_token, storage_id
     if not (user and password):
-        return False, None
-    if check_user_login(user, password):
-        return True, current_session.create_session(gensalt())
-    return False, None
+        return False, None, None
+    possible_user_id = check_user_login(user, password)
+    if possible_user_id:
+        return True, current_session.create_session(str(gensalt()), possible_user_id), possible_user_id
+    return False, None, None
 
 @app.middleware("http")
 async def check_session_token_middleware(request: Request, call_next):
-    protected_paths = ("/api", "/download", "/upload")
-    # only enforce token if the request path starts with a protected path
-    if request.url.path.startswith(protected_paths):
-        token = request.headers.get("X-Session-Token")
-        if not token or not current_session.validate_session(token):
-            return JSONResponse({"detail": "Invalid or missing session token"}, status_code=401)
+    protected_paths = ("/api", "/download", "/upload", "/login, /icon")
+    if not request.url.path.startswith(protected_paths):
+        return await call_next(request)
+    token = request.headers.get("X-Session-Token")
+    user_password = request.headers.get("X-Password")
+    user_name = request.headers.get("X-Username")
+    was_successful, session_token, storage_id = authenticate(
+        user=user_name, password=user_password, session_token=token
+    )
+    if not was_successful:
+        return JSONResponse({"detail": "Invalid or missing session token, username or password"}, status_code=401)
+    storage_folder = f"USER_STORAGE_{storage_id}"
+    request.state.user_storage_folder = storage_folder
+    # only create if not exists
+    os.makedirs(storage_folder, exist_ok=True)
     response = await call_next(request)
     return response
 
@@ -292,39 +244,42 @@ async def root():
     return {"message": "FastAPI backend is running"}
 
 @app.get("/api/items")
-async def get_all_items():
-    return {"items": list_all_items()}
+async def get_all_items(request: Request):
+    storage_folder_to_user = getattr(request.state, "user_storage_folder", None)
+    return {"items": list_all_items(storage_folder_to_user)}
 
 @app.get("/api/items/info")
-async def get_all_items_info():
-    items = list_all_items()
+async def get_all_items_info(request: Request):
+    storage_folder_to_user = getattr(request.state, "user_storage_folder", None)
+    items = list_all_items(storage_folder_to_user)
     return {
-        "items": [get_file_info(item) for item in items]
+        "items": [get_file_info(storage_folder_to_user, item) for item in items]
     }
 
 @app.get("/login")
 async def try_login(user_name: str, password: str):
-    login_success, login_token = authenticate(user_name, password)
+    login_success, login_token, storage_id = authenticate(user_name, password)
     login_status = "success" if login_success else "fail"
     return {"status": login_status,
-            "token": login_token}
+            "token": login_token,}
 
 @app.get("/api/items/info/{item_names}")
-async def get_specific_items_info(item_names: str):
+async def get_specific_items_info(request: Request, item_names: str):
+    storage_folder_to_user = getattr(request.state, "user_storage_folder", None)
     names = item_names.split(",")
     info = []
 
     for name in names:
         try:
-            info.append(get_file_info(name))
+            info.append(get_file_info(storage_folder_to_user, name))
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail=f"{name} not found")
 
     return {"items": info}
 
 @app.get("/api/file_content")
-async def get_file_content(item_name: str):
-    file_path = os.path.join(STORAGE_FOLDER, item_name)
+async def get_file_content(storage_folder, item_name: str):
+    file_path = os.path.join(storage_folder, item_name)
     try:
         with open(file_path, "r") as file:
             contence = file.read()
@@ -337,15 +292,17 @@ async def get_file_content(item_name: str):
                 "error" : e}
 
 @app.delete("/api/items/{item_names}")
-async def delete_item(item_names: str):
+async def delete_item(request: Request, item_names: str):
+    storage_folder_to_user = getattr(request.state, "user_storage_folder", None)
     names = item_names.split(",")
-    return delete_items(names)
+    return delete_items(storage_folder_to_user, names)
 
 @app.get("/download/{filename}")
-async def download_file(filename: str):
+async def download_file(request: Request, filename: str):
+    storage_folder_to_user = getattr(request.state, "user_storage_folder", None)
     try:
         format_path = os.path.normpath(filename)
-        file_path = os.path.join(STORAGE_FOLDER, format_path)
+        file_path = os.path.join(storage_folder_to_user, format_path)
 
         if not os.path.isdir(file_path):
             return FileResponse(
@@ -355,63 +312,72 @@ async def download_file(filename: str):
             )
         else:
             archive_name = os.path.basename(format_path)
-            archive_file_path = zip_file(format_path, ARCHIVE_EXTENTION, archive_name)
+            archive_file_path = zip_file(storage_folder_to_user, format_path, ARCHIVE_EXTENTION, archive_name)
             return FileResponse(
                 path=archive_file_path,
                 filename=f"{archive_name}.{ARCHIVE_EXTENTION}",
                 media_type="application/octet-stream"
             )
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"{item_name} not found")
+        raise HTTPException(status_code=404, detail=f"Item not found")
     except Exception as e:
         HTTPException(status_code=404, detail=f"Error getting file: {e}")
 
 @app.get("/icon")
-async def get_icon(relative_path: str):
-    relative_path = os.path.normpath(relative_path)
-    file = os.path.join(STORAGE_FOLDER, relative_path)
+async def get_icon(request: Request, relative_path: str):
     try:
-        # Get the PIL.Image
-        img = get_file_icon(file, size=64)
-        # Convert PIL image to PNG bytes
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        buf.seek(0)
-        # Return as StreamingResponse
-        return StreamingResponse(buf, media_type="image/png")
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="File not found")
+        path = Path(relative_path)
+
+        # Folder detection
+        if relative_path.endswith("/") or path.suffix == "":
+            icon_path = ICONS_DIR / "folder.png"
+        else:
+            ext = path.suffix.lower().replace(".", "")
+            icon_file = resolve_icon(ext)
+            icon_path = ICONS_DIR / icon_file
+
+        # Fallback safety
+        if not icon_path.exists():
+            icon_path = ICONS_DIR / "file.png"
+
+        return FileResponse(icon_path, media_type="image/png")
+
+    except Exception:
+        raise HTTPException(status_code=500, detail="Icon error")
 
 @app.post("/upload/files")
-async def folder_upload(file: UploadFile = File(...), relative_path: str = STORAGE_FOLDER):
-    os.makedirs(TEMPORARY_FOLDER, exist_ok=True)
-    if relative_path != STORAGE_FOLDER:
-        if not ("." in relative_path):
-            extract_dir = os.path.join(STORAGE_FOLDER, relative_path)
-        else:
-            extract_dir = STORAGE_FOLDER
-    else:
-        extract_dir = STORAGE_FOLDER
+async def folder_upload(request: Request, file: UploadFile = File(...), relative_path: str = ""):
+    storage_folder_to_user = getattr(request.state, "user_storage_folder", None)
+    if storage_folder_to_user is None:
+        raise HTTPException(status_code=400, detail="User storage folder not set")
 
-    temp_zip_path = os.path.join(TEMPORARY_FOLDER, f"{file.filename}")
-    if os.path.exists(extract_dir) and (extract_dir != STORAGE_FOLDER):
-        return {
-            "status": "fail",
-            "info": {"status": "fail", "file_path": extract_dir, "error": "File already exists."}
-        }
+    # Target folder
+    if relative_path:
+        extract_dir = os.path.join(storage_folder_to_user, relative_path)
+    else:
+        extract_dir = storage_folder_to_user
+
+    os.makedirs(TEMPORARY_FOLDER, exist_ok=True)
     os.makedirs(extract_dir, exist_ok=True)
+
+    temp_zip_path = os.path.join(TEMPORARY_FOLDER, f"{file.filename}.zip")
+
     file_upload_info = []
     successful_uploads = 0
 
     try:
+        # Save uploaded file temporarily
         with open(temp_zip_path, "wb") as buffer:
+            # noinspection PyTypeChecker
             shutil.copyfileobj(file.file, buffer)
 
+        # Extract
         extract_zip(extract_dir, temp_zip_path)
 
-        for root, dirs, files in os.walk(extract_dir):
+        # List extracted files
+        for folder_root, dirs, files in os.walk(extract_dir):
             for filename in files:
-                file_path = os.path.join(root, filename)
+                file_path = os.path.join(folder_root, filename)
                 file_upload_info.append({"status": "success", "file_path": file_path})
                 successful_uploads += 1
 
@@ -421,10 +387,11 @@ async def folder_upload(file: UploadFile = File(...), relative_path: str = STORA
     finally:
         if os.path.exists(temp_zip_path):
             os.remove(temp_zip_path)
-        return {
-            "status": "success" if successful_uploads > 0 else "fail",
-            "info": file_upload_info
-        }
+
+    return {
+        "status": "success" if successful_uploads > 0 else "fail",
+        "info": file_upload_info
+    }
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
