@@ -94,6 +94,22 @@ app.get('/api/items/info', async (req, res) => {
     }
 });
 
+app.get('/api/items/info/subfolders', async (req, res) => {
+    try {
+        const response = await axios.get(`${BACKEND_URL}/api/items/info/subfolders`, {
+            params: { relative_path: req.query.relative_path },
+            headers: getAuthHeaders(req)
+        });
+
+        res.status(response.status).json(response.data);
+    } catch (err) {
+        console.error(err);
+        res
+            .status(err.response?.status || 500)
+            .json(err.response?.data || { error: 'Backend error' });
+    }
+});
+
 app.get('/api/items/info/:item_names', async (req, res) => {
     try {
         const response = await axios.get(`${BACKEND_URL}/api/items/info/${req.params.item_names}`, {
