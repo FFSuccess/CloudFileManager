@@ -1,60 +1,43 @@
 const express = require('express');
-const fetch = require('node-fetch');
-const { readFile } = require('fs').promises;
 const fs = require('fs');
 const path = require('path');
-const axios = require("axios");
+const axios = require('axios');
 const multer = require('multer');
 const FormData = require('form-data');
+const { readFile } = require('fs').promises;
 
 const app = express();
 app.use(express.json());
 
-const FAIL_MESSAGE = "Failed to load page";
 const BACKEND_URL = "http://localhost:8000"; // FastAPI backend
 const TEMP_UPLOAD_DIR = path.join(__dirname, "temp_uploads");
+const FAIL_MESSAGE = "Failed to load page";
 
-// Ensure temp dir exists
-if (!fs.existsSync(TEMP_UPLOAD_DIR)) {
-    fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
-}
+// Ensure temp upload dir exists
+if (!fs.existsSync(TEMP_UPLOAD_DIR)) fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
 
- 
-// MULTER (ZIP UPLOAD ONLY)
+// Multer for ZIP uploads
 const upload = multer({
     dest: TEMP_UPLOAD_DIR,
-    limits: {
-        fileSize: 1024 * 1024 * 1024 // 1GB
-    }
+    limits: { fileSize: 1024 * 1024 * 1024 } // 1GB
 });
 
-
-// HELPER: Get session token from request
+// Helper: get session token
 function getSessionToken(req) {
-    // Check Authorization header first (Bearer token)
     const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        return authHeader.substring(7);
-    }
-
-    // Check X-Session-Token header
+    if (authHeader && authHeader.startsWith('Bearer ')) return authHeader.slice(7);
     return req.headers['x-session-token'] || null;
 }
 
-// HELPER: Create headers with session token
-function getAuthHeaders(req, additionalHeaders = {}) {
+// Helper: create headers
+function getAuthHeaders(req, extra = {}) {
     const token = getSessionToken(req);
-    const headers = { ...additionalHeaders };
-
-    if (token) {
-        headers['X-Session-Token'] = token;
-    }
-
+    const headers = { ...extra };
+    if (token) headers['X-Session-Token'] = token;
     return headers;
 }
 
-
-// HTML SERVING
+// Serve HTML files
 async function serveHTML(res, filePath) {
     try {
         const html = await readFile(filePath, 'utf-8');
@@ -65,150 +48,106 @@ async function serveHTML(res, filePath) {
     }
 }
 
+// --- API Proxy Routes using axios --- //
 
-// API PROXY ROUTES
 app.get('/api/login', async (req, res) => {
     try {
         const { user_name, password } = req.query;
-        const response = await fetch(
-            `${BACKEND_URL}/login?user_name=${encodeURIComponent(user_name)}&password=${encodeURIComponent(password)}`
-        );
-        res.status(response.status).json(await response.json());
+        const response = await axios.get(`${BACKEND_URL}/login`, { params: { user_name, password } });
+        res.status(response.status).json(response.data);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Backend error' });
+        res.status(err.response?.status || 500).json(err.response?.data || { error: 'Backend error' });
     }
 });
 
 app.get('/api/items', async (req, res) => {
     try {
-        const response = await fetch(`${BACKEND_URL}/api/items`, {
+        const response = await axios.get(`${BACKEND_URL}/api/items`, {
             headers: getAuthHeaders(req)
         });
-        res.status(response.status).json(await response.json());
+        res.status(response.status).json(response.data);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Backend error' });
+        res.status(err.response?.status || 500).json(err.response?.data || { error: 'Backend error' });
     }
 });
 
 app.get('/api/items/info', async (req, res) => {
     try {
-        const response = await fetch(`${BACKEND_URL}/api/items/info`, {
+        const response = await axios.get(`${BACKEND_URL}/api/items/info`, {
             headers: getAuthHeaders(req)
         });
-        res.status(response.status).json(await response.json());
+        res.status(response.status).json(response.data);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Backend error' });
+        res.status(err.response?.status || 500).json(err.response?.data || { error: 'Backend error' });
     }
 });
 
 app.get('/api/items/info/:item_names', async (req, res) => {
     try {
-        const response = await fetch(`${BACKEND_URL}/api/items/info/${req.params.item_names}`, {
+        const response = await axios.get(`${BACKEND_URL}/api/items/info/${req.params.item_names}`, {
             headers: getAuthHeaders(req)
         });
-        res.status(response.status).json(await response.json());
+        res.status(response.status).json(response.data);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Backend error' });
+        res.status(err.response?.status || 500).json(err.response?.data || { error: 'Backend error' });
     }
 });
 
 app.get('/api/file_content', async (req, res) => {
     try {
-        const response = await fetch(
-            `${BACKEND_URL}/api/file_content?item_name=${encodeURIComponent(req.query.item_name)}`,
-            {
-                headers: getAuthHeaders(req)
-            }
-        );
-        res.status(response.status).json(await response.json());
+        const response = await axios.get(`${BACKEND_URL}/api/file_content`, {
+            params: { item_name: req.query.item_name },
+            headers: getAuthHeaders(req)
+        });
+        res.status(response.status).json(response.data);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Backend error' });
+        res.status(err.response?.status || 500).json(err.response?.data || { error: 'Backend error' });
     }
 });
 
-// DOWNLOAD
-app.get('/download/:filename', async (req, res) => {
-    try {
-        const response = await fetch(`${BACKEND_URL}/download/${encodeURIComponent(req.params.filename)}`, {
-            headers: getAuthHeaders(req)
-        });
-
-        if (!response.ok) {
-            if (response.status === 401) return res.status(401).json({ error: 'Unauthorized' });
-            return res.sendStatus(response.status);
-        }
-
-        // 1. Determine the filename
-        let filename = req.params.filename;
-
-        // 2. Logic: If the filename doesn't contain a dot, add .zip
-        if (!filename.includes('.')) {
-            filename += '.zip';
-        }
-
-        // 3. Set headers
-        const contentType = response.headers.get("content-type") || "application/zip";
-        res.setHeader("Content-Type", contentType);
-        res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-
-        // Pipe the raw stream properly
-        response.body.pipe(res);
-
-        response.body.on("error", (err) => {
-            console.error("Stream error:", err);
-            res.end();
-        });
-    } catch (err) {
-        console.error("Download failed:", err);
-        res.status(500).send("Download failed");
-    }
-});
-
-
-// DELETE
+// DELETE items
 app.delete('/api/items/:item_names', async (req, res) => {
     try {
-        const itemNames = req.params.item_names;
-
-        if (!itemNames) {
-            return res.status(400).json({ error: 'No items specified' });
-        }
-
-        const encoded = encodeURIComponent(itemNames);
-
-        const response = await fetch(`${BACKEND_URL}/api/items/${encoded}`, {
-            method: "DELETE",
+        const response = await axios.delete(`${BACKEND_URL}/api/items/${encodeURIComponent(req.params.item_names)}`, {
             headers: getAuthHeaders(req)
         });
-
-        const text = await response.text();
-        res.status(response.status);
-
-        try {
-            res.json(JSON.parse(text));
-        } catch {
-            res.send(text);
-        }
+        res.status(response.status).json(response.data);
     } catch (err) {
-        console.error('Express delete error:', err);
-        res.status(500).json({ error: 'Backend error', details: err.message });
+        console.error(err);
+        res.status(err.response?.status || 500).json(err.response?.data || { error: 'Backend error' });
     }
 });
 
-// FRONTEND ROUTES (NO AUTH)
+// Download file
+app.get('/download/:filename', async (req, res) => {
+    try {
+        const response = await axios.get(`${BACKEND_URL}/download/${encodeURIComponent(req.params.filename)}`, {
+            headers: getAuthHeaders(req),
+            responseType: 'stream'
+        });
+
+        const filename = req.params.filename.includes('.') ? req.params.filename : req.params.filename + '.zip';
+        res.setHeader('Content-Type', response.headers['content-type'] || 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        response.data.pipe(res);
+    } catch (err) {
+        console.error("Download failed:", err.message);
+        res.status(err.response?.status || 500).send("Download failed");
+    }
+});
+
+// Serve frontend HTML
 app.get('/', (req, res) => serveHTML(res, './home.html'));
 app.get('/login', (req, res) => serveHTML(res, './login.html'));
 
-// ZIP UPLOAD → FASTAPI
+// ZIP upload
 app.post("/upload/files", upload.single("files"), async (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ status: "fail", error: "No file uploaded" });
-    }
+    if (!req.file) return res.status(400).json({ status: "fail", error: "No file uploaded" });
 
     const zipPath = req.file.path;
     const zipName = req.file.originalname;
@@ -216,73 +155,48 @@ app.post("/upload/files", upload.single("files"), async (req, res) => {
     try {
         const formData = new FormData();
         formData.append("file", fs.createReadStream(zipPath), zipName);
+        if (req.body.relative_path) formData.append("relative_path", req.body.relative_path);
 
-        if (req.body.relative_path) {
-            formData.append("relative_path", req.body.relative_path);
-        }
-
-        // Get session token and add to headers
         const token = getSessionToken(req);
-        const headers = {
-            ...formData.getHeaders()
-        };
+        const headers = { ...formData.getHeaders() };
+        if (token) headers['X-Session-Token'] = token;
 
-        if (token) {
-            headers['X-Session-Token'] = token;
-        }
-
-        const response = await axios.post(
-            `${BACKEND_URL}/upload/files`,
-            formData,
-            {
-                headers: headers,
-                maxBodyLength: Infinity,
-                maxContentLength: Infinity
-            }
-        );
+        const response = await axios.post(`${BACKEND_URL}/upload/files`, formData, {
+            headers,
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity
+        });
 
         res.json(response.data);
     } catch (err) {
-        console.error("Upload forwarding failed:", err.message);
-
-        // Handle authentication errors
-        if (err.response?.status === 401) {
-            return res.status(401).json({ status: "fail", error: "Unauthorized" });
-        }
-
-        res.status(500).json({ status: "fail", error: "Upload forwarding failed" });
+        console.error("Upload failed:", err.message);
+        res.status(err.response?.status || 500).json({ status: "fail", error: "Upload failed" });
     } finally {
         fs.unlink(zipPath, () => {});
     }
 });
 
-// ICON PROXY
+// Icon proxy
 app.get("/get-icon", async (req, res) => {
     try {
         const token = getSessionToken(req);
         const headers = {};
+        if (token) headers['X-Session-Token'] = token;
 
-        if (token) {
-            headers['X-Session-Token'] = token;
-        }
-
-        const pythonResponse = await axios.get(`${BACKEND_URL}/icon`, {
+        const response = await axios.get(`${BACKEND_URL}/icon`, {
             params: { relative_path: req.query.relative_path },
-            responseType: "arraybuffer",
-            headers: headers
+            responseType: 'arraybuffer',
+            headers
         });
 
-        res.set("Content-Type", "image/png");
-        res.send(pythonResponse.data);
+        res.setHeader("Content-Type", "image/png");
+        res.send(response.data);
     } catch (err) {
-        if (err.response?.status === 401) {
-            return res.status(401).json({ error: 'Unauthorized' });
-        }
+        console.error(err.message);
         res.status(err.response?.status || 500).send("Icon error");
     }
 });
 
+// Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("Server running on", PORT);
-});
+app.listen(PORT, () => console.log(`Server running on ${PORT}`));
